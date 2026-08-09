@@ -11,13 +11,6 @@ use Carbon\Carbon;
 
 class PresenceController extends Controller
 {
-    // Scan du QR — pointe arrivée ou départ selon l'état du jour
-    // Gère à la fois le QR individuel (opérateur DRH) et le QR global (auto-scan par l'employé)
-    // Coordonnées GPS de Data Links SARL (Cotonou) — À REMPLACER par les vraies coordonnées du bâtiment
-    const LATITUDE_ENTREPRISE = 6.3822991; 
-    const LONGITUDE_ENTREPRISE = 2.4037964; 
-    const RAYON_AUTORISE_METRES = 30;
-
     // Distance en mètres entre deux points GPS (formule de Haversine)
     private function distanceMetres($lat1, $lng1, $lat2, $lng2)
     {
@@ -29,6 +22,8 @@ class PresenceController extends Controller
         return $rayonTerre * $c;
     }
 
+    // Scan du QR — pointe arrivée ou départ selon l'état du jour
+    // Gère à la fois le QR individuel (opérateur DRH) et le QR global (auto-scan par l'employé)
     public function scanner(Request $request)
     {
         $request->validate([
@@ -56,12 +51,12 @@ class PresenceController extends Controller
 
             $distance = $this->distanceMetres(
                 $request->latitude, $request->longitude,
-                self::LATITUDE_ENTREPRISE, self::LONGITUDE_ENTREPRISE
+                $qrGlobalActuel->latitude, $qrGlobalActuel->longitude
             );
 
-            if ($distance > self::RAYON_AUTORISE_METRES) {
+            if ($distance > $qrGlobalActuel->rayon_metres) {
                 return response()->json([
-                    'message' => "Vous devez être présent dans les locaux de Data Links pour pointer via le QR Code général.",
+                    'message' => "Vous devez être présent dans les locaux pour pointer via le QR Code général.",
                 ], 422);
             }
         } else {
@@ -83,7 +78,10 @@ class PresenceController extends Controller
             // Premier scan du jour → Arrivée
 
             if ($estScanGlobal) {
-                $limite = $employe->user->role === 'stagiaire' ? '08:00:00' : '08:30:00';
+                $limite = $employe->user->role === 'stagiaire'
+                    ? $qrGlobalActuel->limite_arrivee_stagiaire
+                    : $qrGlobalActuel->limite_arrivee_employe;
+
                 if ($now > $limite) {
                     $employe->user->notify(new \App\Notifications\QrGlobalHorsDelaiNotification(substr($limite, 0, 5)));
                     return response()->json([
@@ -114,8 +112,8 @@ class PresenceController extends Controller
             // Deuxième scan du jour → Départ
 
             if ($estScanGlobal) {
-                $debutBlocage = '09:00:00';
-                $finBlocage = '18:30:00';
+                $debutBlocage = $qrGlobalActuel->blocage_depart_debut;
+                $finBlocage = $qrGlobalActuel->blocage_depart_fin;
 
                 if ($now >= $debutBlocage && $now < $finBlocage) {
                     $permissionValide = DemandeAbsence::where('employe_id', $employe->id)
@@ -130,7 +128,7 @@ class PresenceController extends Controller
 
                     if (!$permissionValide) {
                         return response()->json([
-                            'message' => "Le pointage de départ via le QR Code général n'est pas disponible entre 9h00 et 18h30. Revenez à 18h30, ou présentez-vous avec une permission validée en cours.",
+                            'message' => "Le pointage de départ via le QR Code général n'est pas disponible entre " . substr($debutBlocage, 0, 5) . " et " . substr($finBlocage, 0, 5) . ". Revenez plus tard, ou présentez-vous avec une permission validée en cours.",
                         ], 422);
                     }
                 }
@@ -185,6 +183,7 @@ class PresenceController extends Controller
 
         return response()->json(['qr_token' => $employe->qr_token]);
     }
+
     public function historique(Request $request)
     {
         $query = Presence::with('employe.user', 'employe.departement', 'scannePar');
@@ -195,7 +194,6 @@ class PresenceController extends Controller
             $query->whereYear('date', $request->annee)
                 ->whereMonth('date', $request->mois);
         } elseif ($request->annee) {
-        // Nouveau : toute l'année, sans filtre de mois
             $query->whereYear('date', $request->annee);
         }
 
@@ -207,6 +205,7 @@ class PresenceController extends Controller
             $query->orderBy('date', 'desc')->orderBy('heure_arrivee', 'desc')->get()
         );
     }
+
     public function presentsAujourdhui()
     {
         $today = \Carbon\Carbon::today()->toDateString();

@@ -8,7 +8,12 @@ class QrGlobal extends Model
 {
     protected $table = 'qr_globals';
 
-    protected $fillable = ['code', 'genere_par'];
+    protected $fillable = [
+        'code', 'genere_par',
+        'limite_arrivee_employe', 'limite_arrivee_stagiaire',
+        'blocage_depart_debut', 'blocage_depart_fin',
+        'latitude', 'longitude', 'rayon_metres',
+    ];
 
     public function generateur()
     {

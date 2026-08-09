@@ -10,7 +10,7 @@ class BienvenuNotification extends Notification
     {
         return [
             'type'    => 'bienvenu',
-            'message' => "Bienvenue sur Easy HR ! Votre compte a été créé avec succès.",
+            'message' => "Bienvenue sur GRH ACS ! Votre compte a été créé avec succès.",
         ];
     }
 }

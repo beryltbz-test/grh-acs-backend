@@ -15,6 +15,7 @@ use App\Http\Controllers\API\UserManagementController;
 use App\Http\Controllers\API\PermissionController;
 use App\Http\Controllers\API\QrGlobalController;
 use App\Http\Controllers\API\PinController;
+use App\Http\Controllers\API\RapportFinalController;
 
 // ============ Routes publiques ============
 Route::post('/login', [AuthController::class, 'login']);
@@ -101,6 +102,8 @@ Route::middleware('role:admin,drh,directeur,employe,stagiaire')->group(function 
     Route::post('pin/verifier', [PinController::class, 'verifier']);
     Route::get('travaux-stagiaire', [TravailStagiaireController::class, 'index']);
     Route::post('travaux-stagiaire', [TravailStagiaireController::class, 'store'] );
+    Route::post('travaux-stagiaire/rapport-final', [RapportFinalController::class, 'store']);
+    Route::get('travaux-stagiaire/mon-rapport-final', [RapportFinalController::class, 'monRapportFinal']);
     Route::get('mes-permissions', [PermissionController::class, 'mesPermissions']);
     Route::get('travaux-stagiaire/aujourd-hui', [TravailStagiaireController::class, 'monRapportDuJour']);
     Route::get('presences/mes-presences', function (Request $request) {

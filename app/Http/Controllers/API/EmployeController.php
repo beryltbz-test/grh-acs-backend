@@ -30,8 +30,6 @@ class EmployeController extends Controller
         $request->validate([
             'prenom'           => 'required|string',
             'nom'              => 'required|string',
-            // email/password désormais optionnels : requis pour l'Admin (via Utilisateurs.jsx),
-            // omis pour la DRH/Directeur qui créent un employé/stagiaire sans définir ses identifiants
             'email'            => 'nullable|email|unique:users',
             'password'         => 'nullable|min:6',
             'role'             => 'required|in:admin,drh,directeur,employe,stagiaire',
@@ -50,8 +48,6 @@ class EmployeController extends Controller
             'contrat'          => 'nullable|file|mimes:pdf|max:5120',
         ]);
 
-        // Un Directeur ou une DRH ne peut créer que des Employés ou des Stagiaires,
-        // jamais un autre Directeur/DRH/Admin
         if (in_array($request->user()->role, ['drh', 'directeur']) && !in_array($request->role, ['employe', 'stagiaire'])) {
             return response()->json(['message' => "Vous ne pouvez créer que des employés ou des stagiaires"], 403);
         }
@@ -60,7 +56,7 @@ class EmployeController extends Controller
 
         // Si l'email/mot de passe ne sont pas fournis (création par DRH/Directeur),
         // on génère des valeurs temporaires ; l'Admin les redéfinira ensuite depuis Utilisateurs.jsx
-        $email = $request->filled('email') ? $request->email : 'temp.' . uniqid() . '@datalinks.local';
+        $email = $request->filled('email') ? $request->email : 'temp.' . uniqid() . '@acs.local';
         $password = $request->filled('password') ? $request->password : bin2hex(random_bytes(8));
 
         $user = User::create([
@@ -71,7 +67,7 @@ class EmployeController extends Controller
             'telephone'=> $request->telephone,
         ]);
 
-        $matricule = 'DL-' . strtoupper(substr($request->role, 0, 3)) . '-' . str_pad($user->id, 3, '0', STR_PAD_LEFT);
+        $matricule = 'ACS-' . strtoupper(substr($request->role, 0, 3)) . '-' . str_pad($user->id, 3, '0', STR_PAD_LEFT);
 
         $employe = Employe::create([
             'user_id'             => $user->id,
@@ -88,7 +84,6 @@ class EmployeController extends Controller
             'notes'               => $request->notes,
         ]);
 
-        // Upload CV
         if ($request->hasFile('cv')) {
             $path = $request->file('cv')->store('documents/cv', 'public');
             DocumentEmploye::create([
@@ -99,7 +94,6 @@ class EmployeController extends Controller
             ]);
         }
 
-        // Upload Contrat
         if ($request->hasFile('contrat')) {
             $path = $request->file('contrat')->store('documents/contrats', 'public');
             DocumentEmploye::create([
@@ -134,6 +128,12 @@ class EmployeController extends Controller
     public function update(Request $request, $id)
     {
         $employe = Employe::findOrFail($id);
+        $ancienRole = $employe->user->role;
+        $demandeur = $request->user();
+
+        if (in_array($demandeur->role, ['drh', 'directeur']) && !in_array($ancienRole, ['employe', 'stagiaire'])) {
+            return response()->json(['message' => "Vous ne pouvez modifier que des employés ou des stagiaires"], 403);
+        }
 
         $employe->update($request->only(
             'departement_id', 'poste', 'type_contrat', 'date_embauche',
@@ -145,7 +145,6 @@ class EmployeController extends Controller
             $employe->user->update($request->only('name', 'email', 'telephone'));
         }
 
-        // Upload nouveau CV si fourni
         if ($request->hasFile('cv')) {
             $path = $request->file('cv')->store('documents/cv', 'public');
             DocumentEmploye::create([
@@ -156,7 +155,6 @@ class EmployeController extends Controller
             ]);
         }
 
-        // Upload nouveau contrat si fourni
         if ($request->hasFile('contrat')) {
             $path = $request->file('contrat')->store('documents/contrats', 'public');
             DocumentEmploye::create([
