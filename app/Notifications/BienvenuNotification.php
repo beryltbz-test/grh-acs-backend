@@ -13,4 +13,4 @@ class BienvenuNotification extends Notification
             'message' => "Bienvenue sur GRH ACS ! Votre compte a été créé avec succès.",
         ];
     }
-}
+} 
