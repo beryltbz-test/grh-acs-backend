@@ -13,6 +13,18 @@ class OffreEmploiController extends Controller
         return response()->json(OffreEmploi::with('departement', 'publiePar', 'candidatures')->get());
     }
 
+    // Endpoint public (page de candidature) : uniquement les offres ouvertes,
+    // sans exposer les candidatures (données personnelles des candidats).
+    public function publiques()
+    {
+        return response()->json(
+            OffreEmploi::with('departement')
+                ->where('statut', 'ouverte')
+                ->orderBy('created_at', 'desc')
+                ->get()
+        );
+    }
+
     public function store(Request $request)
     {
         $request->validate([

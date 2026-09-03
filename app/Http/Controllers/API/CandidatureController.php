@@ -3,6 +3,7 @@ namespace App\Http\Controllers\API;
 
 use App\Http\Controllers\Controller;
 use App\Models\Candidature;
+use App\Models\OffreEmploi;
 use Illuminate\Http\Request;
 use App\Notifications\NouvelleCandidatureNotification;
 
@@ -23,6 +24,11 @@ class CandidatureController extends Controller
             'telephone_candidat' => 'nullable|string',
             'lettre_motivation'  => 'nullable|string',
         ]);
+
+        $offre = OffreEmploi::findOrFail($request->offre_id);
+        if ($offre->statut !== 'ouverte') {
+            return response()->json(['message' => "Cette offre n'est plus disponible."], 422);
+        }
 
         $candidature = Candidature::create([
             ...$request->all(),

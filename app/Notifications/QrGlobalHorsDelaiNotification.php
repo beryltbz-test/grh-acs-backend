@@ -11,10 +11,12 @@ class QrGlobalHorsDelaiNotification extends Notification
     use Queueable;
 
     protected $heureLimite;
+    protected $heureArrivee;
 
-    public function __construct(string $heureLimite)
+    public function __construct(string $heureLimite, string $heureArrivee)
     {
         $this->heureLimite = $heureLimite;
+        $this->heureArrivee = $heureArrivee;
     }
 
     public function via($notifiable)
@@ -25,7 +27,7 @@ class QrGlobalHorsDelaiNotification extends Notification
     public function toDatabase($notifiable)
     {
         return [
-            'message' => "L'heure limite ({$this->heureLimite}) pour pointer votre arrivée via le QR Code général est dépassée. Merci de vous enregistrer auprès de la DRH avec votre QR Code personnel.",
+            'message' => "Arrivée enregistrée à {$this->heureArrivee}, après l'heure limite ({$this->heureLimite}). Vous êtes marqué en retard.",
         ];
     }
 }

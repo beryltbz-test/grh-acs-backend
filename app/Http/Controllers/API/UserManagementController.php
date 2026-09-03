@@ -8,17 +8,16 @@ use App\Models\DocumentEmploye;
 use App\Models\Permission;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Storage;
 use App\Notifications\BienvenuNotification;
 
 class UserManagementController extends Controller
 {
-    // Modules accordés par défaut selon le rôle (référence : commande permissions:seed-defaults)
     private $permissionsParDefaut = [
         'drh'       => ['absences', 'scanner', 'historique_presence', 'recrutement'],
         'directeur' => ['absences', 'recrutement'],
     ];
 
-    // Attribue les permissions par défaut correspondant au rôle, sans dupliquer
     private function seedPermissionsParDefaut(User $user)
     {
         $modules = $this->permissionsParDefaut[$user->role] ?? [];
@@ -30,7 +29,25 @@ class UserManagementController extends Controller
         }
     }
 
-    // Liste complète tous rôles (vue Admin)
+    // Remplace un document unique d'un type donné (cv ou contrat) : supprime physiquement
+    // l'ancien fichier avant d'enregistrer le nouveau, pour éviter les fichiers orphelins.
+    private function remplacerDocumentUnique(Employe $employe, $fichier, string $type, string $dossier)
+    {
+        $ancien = $employe->documents()->where('type', $type)->first();
+        if ($ancien) {
+            Storage::disk('public')->delete($ancien->chemin_fichier);
+            $ancien->delete();
+        }
+
+        $path = $fichier->store($dossier, 'public');
+        DocumentEmploye::create([
+            'employe_id'     => $employe->id,
+            'type'           => $type,
+            'nom_fichier'    => $fichier->getClientOriginalName(),
+            'chemin_fichier' => $path,
+        ]);
+    }
+
     public function index()
     {
         return response()->json(
@@ -38,7 +55,6 @@ class UserManagementController extends Controller
         );
     }
 
-    // Création d'un compte (employé, stagiaire, drh, directeur, admin)
     public function store(Request $request)
     {
         $request->validate([
@@ -88,11 +104,8 @@ class UserManagementController extends Controller
         ]);
 
         $user->notify(new BienvenuNotification());
-
-        // Attribution automatique des permissions par défaut si DRH ou Directeur
         $this->seedPermissionsParDefaut($user);
 
-        // Rappel à tous les admins : ne pas oublier d'accorder l'accès scanner si nécessaire
         User::where('role', 'admin')->each(function ($admin) use ($user) {
             $admin->notify(new \App\Notifications\RappelAccorderScannerNotification($user->name));
         });
@@ -121,18 +134,20 @@ class UserManagementController extends Controller
         ], 201);
     }
 
-    // Modification (rôle, département, infos de base)
     public function update(Request $request, $id)
     {
         $employe = Employe::findOrFail($id);
         $ancienRole = $employe->user->role;
         $demandeur = $request->user();
 
-        // Une DRH ou un Directeur ne peut modifier que des Employés ou des Stagiaires,
-        // jamais un compte Admin, Directeur ou DRH (y compris le sien)
         if (in_array($demandeur->role, ['drh', 'directeur']) && !in_array($ancienRole, ['employe', 'stagiaire'])) {
             return response()->json(['message' => "Vous ne pouvez modifier que des employés ou des stagiaires"], 403);
         }
+
+        $request->validate([
+            'cv'      => 'nullable|file|mimes:pdf|max:5120',
+            'contrat' => 'nullable|file|mimes:pdf|max:5120',
+        ]);
 
         $employe->update($request->only(
             'departement_id', 'poste', 'type_contrat', 'date_embauche',
@@ -142,13 +157,10 @@ class UserManagementController extends Controller
 
         $userFields = $request->only('name', 'email', 'telephone', 'role', 'statut');
 
-        // Le mot de passe doit être traité à part : ne l'inclure que s'il est fourni,
-        // et toujours le hasher (jamais stocké en clair)
         if ($request->filled('password')) {
             $userFields['password'] = \Illuminate\Support\Facades\Hash::make($request->password);
         }
 
-        // Une DRH ou un Directeur ne peut jamais changer le rôle vers autre chose qu'employe/stagiaire
         if (in_array($demandeur->role, ['drh', 'directeur']) && isset($userFields['role'])
             && !in_array($userFields['role'], ['employe', 'stagiaire'])) {
             return response()->json(['message' => "Vous ne pouvez pas attribuer ce rôle"], 403);
@@ -158,7 +170,18 @@ class UserManagementController extends Controller
             $employe->user->update($userFields);
         }
 
-        // Si le rôle a changé vers drh/directeur (promotion), on attribue les permissions par défaut
+        if (($userFields['statut'] ?? null) === 'inactif') {
+            $employe->user->tokens()->delete();
+        }
+
+        // Remplacement CV/contrat : supprime l'ancien fichier avant d'enregistrer le nouveau
+        if ($request->hasFile('cv')) {
+            $this->remplacerDocumentUnique($employe, $request->file('cv'), 'cv', 'documents/cv');
+        }
+        if ($request->hasFile('contrat')) {
+            $this->remplacerDocumentUnique($employe, $request->file('contrat'), 'contrat', 'documents/contrats');
+        }
+
         $nouveauRole = $employe->user->fresh()->role;
         if ($nouveauRole !== $ancienRole && in_array($nouveauRole, ['drh', 'directeur'])) {
             $this->seedPermissionsParDefaut($employe->user->fresh());
@@ -170,11 +193,10 @@ class UserManagementController extends Controller
         ]);
     }
 
-    // Suppression définitive du compte
     public function destroy($id)
     {
         $employe = Employe::findOrFail($id);
-        $employe->user->delete(); // cascade supprime aussi l'employe
+        $employe->user->delete();
         return response()->json(['message' => 'Compte supprimé']);
     }
 }

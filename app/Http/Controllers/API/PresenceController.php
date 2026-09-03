@@ -6,15 +6,16 @@ use App\Models\Presence;
 use App\Models\Employe;
 use App\Models\QrGlobal;
 use App\Models\DemandeAbsence;
+use App\Models\DocumentEmploye;
+use App\Models\RapportHebdoRappel;
 use Illuminate\Http\Request;
 use Carbon\Carbon;
 
 class PresenceController extends Controller
 {
-    // Distance en mètres entre deux points GPS (formule de Haversine)
     private function distanceMetres($lat1, $lng1, $lat2, $lng2)
     {
-        $rayonTerre = 6371000; // mètres
+        $rayonTerre = 6371000;
         $dLat = deg2rad($lat2 - $lat1);
         $dLng = deg2rad($lng2 - $lng1);
         $a = sin($dLat / 2) ** 2 + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dLng / 2) ** 2;
@@ -22,8 +23,55 @@ class PresenceController extends Controller
         return $rayonTerre * $c;
     }
 
-    // Scan du QR — pointe arrivée ou départ selon l'état du jour
-    // Gère à la fois le QR individuel (opérateur DRH) et le QR global (auto-scan par l'employé)
+    private function limiteArriveePour($qrGlobalActuel, $employe)
+    {
+        if (!$qrGlobalActuel) {
+            return null;
+        }
+
+        return $employe->user->role === 'stagiaire'
+            ? $qrGlobalActuel->limite_arrivee_stagiaire
+            : $qrGlobalActuel->limite_arrivee_employe;
+    }
+
+    private function aSoumisRapportHebdo(Employe $employe, Carbon $semaineRef)
+    {
+        $debut = $semaineRef->copy()->startOfWeek(Carbon::MONDAY)->startOfDay();
+        $fin = $semaineRef->copy()->endOfWeek(Carbon::SUNDAY)->endOfDay();
+
+        return DocumentEmploye::where('employe_id', $employe->id)
+            ->where('type', 'document_personnel')
+            ->whereBetween('created_at', [$debut, $fin])
+            ->exists();
+    }
+
+    private function verifierRappelHebdo(Employe $employe, string $sousType, Carbon $maintenant)
+    {
+        if ($employe->user->role !== 'employe') {
+            return;
+        }
+
+        $semaineRef = $sousType === 'ultimatum_lundi' ? $maintenant->copy()->subWeek() : $maintenant->copy();
+
+        if ($this->aSoumisRapportHebdo($employe, $semaineRef)) {
+            return;
+        }
+
+        $creation = RapportHebdoRappel::firstOrCreate([
+            'employe_id' => $employe->id,
+            'annee'      => $semaineRef->isoWeekYear,
+            'semaine'    => $semaineRef->isoWeek,
+            'sous_type'  => $sousType,
+        ]);
+
+        if (!$creation->wasRecentlyCreated) {
+            return;
+        }
+
+        $heureLimite = $sousType === 'ultimatum_lundi' ? config('rapports.heure_limite_lundi') : null;
+        $employe->user->notify(new \App\Notifications\RapportHebdoRappelNotification($sousType, $heureLimite));
+    }
+
     public function scanner(Request $request)
     {
         $request->validate([
@@ -36,13 +84,11 @@ class PresenceController extends Controller
         $estScanGlobal = $qrGlobalActuel && $request->qr_token === $qrGlobalActuel->code;
 
         if ($estScanGlobal) {
-            // QR global : la personne scanne elle-même, identifiée par son propre compte
             $employe = $request->user()->employe()->with('user')->first();
             if (!$employe) {
                 return response()->json(['message' => 'Aucun profil employé associé à ce compte'], 404);
             }
 
-            // Vérification de la géolocalisation : uniquement pour le QR global (auto-scan)
             if (!$request->filled('latitude') || !$request->filled('longitude')) {
                 return response()->json([
                     'message' => "La localisation est requise pour utiliser le QR Code général. Merci d'autoriser l'accès à votre position.",
@@ -60,57 +106,59 @@ class PresenceController extends Controller
                 ], 422);
             }
         } else {
-            // QR individuel : identifie la cible par le token scanné
             $employe = Employe::with('user')->where('qr_token', $request->qr_token)->first();
             if (!$employe) {
                 return response()->json(['message' => 'QR Code invalide'], 404);
             }
         }
 
-        $today = Carbon::today()->toDateString();
-        $now = Carbon::now()->toTimeString();
+        if ($employe->user->statut !== 'actif') {
+            return response()->json(['message' => 'Ce compte est désactivé, le pointage est bloqué.'], 403);
+        }
+
+        $maintenant = Carbon::now();
+        $today = $maintenant->toDateString();
+        $now = $maintenant->toTimeString();
 
         $presence = Presence::where('employe_id', $employe->id)
             ->where('date', $today)
             ->first();
 
         if (!$presence) {
-            // Premier scan du jour → Arrivée
-
-            if ($estScanGlobal) {
-                $limite = $employe->user->role === 'stagiaire'
-                    ? $qrGlobalActuel->limite_arrivee_stagiaire
-                    : $qrGlobalActuel->limite_arrivee_employe;
-
-                if ($now > $limite) {
-                    $employe->user->notify(new \App\Notifications\QrGlobalHorsDelaiNotification(substr($limite, 0, 5)));
-                    return response()->json([
-                        'message' => "Heure limite dépassée (" . substr($limite, 0, 5) . "). Merci de vous enregistrer auprès de la DRH avec votre QR Code personnel.",
-                    ], 422);
-                }
-            }
+            $limite = $this->limiteArriveePour($qrGlobalActuel, $employe);
+            $enRetard = $limite ? ($now > $limite) : false;
 
             $presence = Presence::create([
                 'employe_id'    => $employe->id,
                 'date'          => $today,
                 'heure_arrivee' => $now,
+                'en_retard'     => $enRetard,
                 'scanne_par'    => auth()->id(),
             ]);
 
-            $employe->user->notify(new \App\Notifications\PresenceScanneeNotification('arrivee', $now));
+            if ($enRetard) {
+                $employe->user->notify(new \App\Notifications\QrGlobalHorsDelaiNotification(substr($limite, 0, 5), substr($now, 0, 5)));
+            } else {
+                $employe->user->notify(new \App\Notifications\PresenceScanneeNotification('arrivee', $now));
+            }
+
+            if ($maintenant->isFriday()) {
+                $this->verifierRappelHebdo($employe, 'rappel_arrivee_vendredi', $maintenant);
+            } elseif ($maintenant->isMonday()) {
+                $this->verifierRappelHebdo($employe, 'ultimatum_lundi', $maintenant);
+            }
 
             return response()->json([
-                'message' => 'Arrivée enregistrée',
-                'type'    => 'arrivee',
-                'employe' => $employe->user->name,
-                'heure'   => $now,
-                'presence' => $presence,
+                'message'   => $enRetard ? 'Arrivée enregistrée (en retard)' : 'Arrivée enregistrée',
+                'type'      => 'arrivee',
+                'en_retard' => $enRetard,
+                'employe'   => $employe->user->name,
+                'heure'     => $now,
+                'presence'  => $presence,
             ]);
         }
 
         if (!$presence->heure_depart) {
-            // Deuxième scan du jour → Départ
-
             if ($estScanGlobal) {
                 $debutBlocage = $qrGlobalActuel->blocage_depart_debut;
                 $finBlocage = $qrGlobalActuel->blocage_depart_fin;
@@ -141,6 +189,10 @@ class PresenceController extends Controller
 
             $employe->user->notify(new \App\Notifications\PresenceScanneeNotification('depart', $now));
 
+            if ($maintenant->isFriday()) {
+                $this->verifierRappelHebdo($employe, 'rappel_depart_vendredi', $maintenant);
+            }
+
             return response()->json([
                 'message' => 'Départ enregistré',
                 'type'    => 'depart',
@@ -150,14 +202,12 @@ class PresenceController extends Controller
             ]);
         }
 
-        // Déjà pointé arrivée + départ aujourd'hui
         return response()->json([
             'message' => 'Cet employé a déjà pointé son arrivée et son départ aujourd\'hui',
             'presence' => $presence,
         ], 409);
     }
 
-    // Liste des présences (filtrable par employé/période)
     public function index(Request $request)
     {
         $query = Presence::with('employe.user', 'employe.departement', 'scannePar');
@@ -172,7 +222,6 @@ class PresenceController extends Controller
         return response()->json($query->orderBy('date', 'desc')->get());
     }
 
-    // QR Token de l'employé connecté (pour affichage dans son espace)
     public function monQrCode(Request $request)
     {
         $employe = $request->user()->employe;
@@ -184,6 +233,8 @@ class PresenceController extends Controller
         return response()->json(['qr_token' => $employe->qr_token]);
     }
 
+    // Historique paginé — la table présences grandit indéfiniment (aucune purge),
+    // charger tout en mémoire sans pagination devient rapidement problématique.
     public function historique(Request $request)
     {
         $query = Presence::with('employe.user', 'employe.departement', 'scannePar');
@@ -201,8 +252,10 @@ class PresenceController extends Controller
             $query->where('employe_id', $request->employe_id);
         }
 
+        $parPage = min((int) ($request->per_page ?? 100), 500);
+
         return response()->json(
-            $query->orderBy('date', 'desc')->orderBy('heure_arrivee', 'desc')->get()
+            $query->orderBy('date', 'desc')->orderBy('heure_arrivee', 'desc')->paginate($parPage)
         );
     }
 
@@ -216,5 +269,71 @@ class PresenceController extends Controller
             ->get();
 
         return response()->json($presents);
+    }
+
+    public function liste(Request $request)
+    {
+        $date = $request->date ?: Carbon::today()->toDateString();
+        $estAujourdhui = $date === Carbon::today()->toDateString();
+        $statutFiltre = $request->statut;
+
+        $qrGlobalActuel = QrGlobal::actuel();
+        $now = Carbon::now()->toTimeString();
+        $finBlocage = $qrGlobalActuel->blocage_depart_fin ?? '18:30:00';
+
+        $employes = Employe::with('user', 'departement')
+            ->whereHas('user', function ($q) {
+                $q->where('statut', 'actif')->whereIn('role', ['employe', 'stagiaire']);
+            })
+            ->get();
+
+        $presencesDuJour = Presence::where('date', $date)->get()->keyBy('employe_id');
+
+        $roster = $employes->map(function ($employe) use ($presencesDuJour, $qrGlobalActuel, $estAujourdhui, $now, $finBlocage, $date) {
+            $presence = $presencesDuJour->get($employe->id);
+            $limite = $this->limiteArriveePour($qrGlobalActuel, $employe);
+
+            if ($presence && $presence->heure_arrivee) {
+                $etat = $presence->en_retard ? 'en_retard' : 'a_l_heure';
+            } else {
+                $cloture = $estAujourdhui ? ($now >= $finBlocage) : true;
+                if (!$estAujourdhui) {
+                    $etat = 'absent';
+                } elseif ($cloture) {
+                    $etat = 'absent';
+                } elseif ($limite && $now > $limite) {
+                    $etat = 'en_retard';
+                } else {
+                    $etat = 'en_attente';
+                }
+            }
+
+            return [
+                'employe_id'    => $employe->id,
+                'nom'           => $employe->user->name,
+                'role'          => $employe->user->role,
+                'departement'   => $employe->departement->nom ?? null,
+                'date'          => $date,
+                'heure_arrivee' => $presence->heure_arrivee ?? null,
+                'heure_depart'  => $presence->heure_depart ?? null,
+                'etat'          => $etat,
+            ];
+        });
+
+        if ($statutFiltre && $statutFiltre !== 'tous') {
+            $roster = $roster->where('etat', $statutFiltre)->values();
+        }
+
+        return response()->json([
+            'date'  => $date,
+            'total' => $roster->count(),
+            'compteurs' => [
+                'en_attente' => $employes->count() ? $roster->countBy('etat')->get('en_attente', 0) : 0,
+                'a_l_heure'  => $roster->countBy('etat')->get('a_l_heure', 0),
+                'en_retard'  => $roster->countBy('etat')->get('en_retard', 0),
+                'absent'     => $roster->countBy('etat')->get('absent', 0),
+            ],
+            'data' => $roster->values(),
+        ]);
     }
 }
