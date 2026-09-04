@@ -40,6 +40,7 @@ RUN chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
 
 # Config Nginx
 COPY docker/nginx.conf /etc/nginx/sites-available/default
+COPY docker/uploads.ini /usr/local/etc/php/conf.d/uploads.ini
 
 # Script de démarrage
 COPY docker/start.sh /start.sh
