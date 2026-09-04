@@ -16,13 +16,14 @@ use App\Http\Controllers\API\PermissionController;
 use App\Http\Controllers\API\QrGlobalController;
 use App\Http\Controllers\API\PinController;
 use App\Http\Controllers\API\RapportFinalController;
+use App\Http\Controllers\API\DocumentPersonnelController;
 
 // ============ Routes publiques ============
 Route::post('/login', [AuthController::class, 'login']);
 
 // Candidature externe (un candidat postule sans compte)
 Route::post('/candidatures', [CandidatureController::class, 'store']);
-Route::get('/offres-emploi/publiques', [OffreEmploiController::class, 'index']);
+Route::get('/offres-emploi/publiques', [OffreEmploiController::class, 'publiques']);
 
 // ============ Routes protégées ============
 Route::middleware('auth:sanctum')->group(function () {
@@ -41,6 +42,14 @@ Route::middleware('auth:sanctum')->group(function () {
     Route::post('notifications/{id}/lire', function (Request $request, $id) {
         $request->user()->notifications()->findOrFail($id)->markAsRead();
         return response()->json(['message' => 'Notification lue']);
+    });
+        Route::delete('notifications/{id}', function (Request $request, $id) {
+        $request->user()->notifications()->findOrFail($id)->delete();
+        return response()->json(['message' => 'Notification supprimée']);
+    });
+    Route::delete('notifications-lues', function (Request $request) {
+        $request->user()->readNotifications()->delete();
+        return response()->json(['message' => 'Notifications lues supprimées']);
     });
 
     // ============ Admin uniquement (gestion technique) ============
@@ -72,6 +81,7 @@ Route::middleware('permission:scanner,admin')->group(function () {
 // Historique présence — accessible par rôle standard OU permission individuelle
 Route::middleware('permission:historique_presence,admin')->group(function () {
     Route::get('presences/historique', [PresenceController::class, 'historique']);
+    Route::get('presences/liste', [PresenceController::class, 'liste']);
 });
 
 // ============ Admin + DRH + Directeur (lecture départements) ============
@@ -106,6 +116,9 @@ Route::middleware('role:admin,drh,directeur,employe,stagiaire')->group(function 
     Route::get('travaux-stagiaire/mon-rapport-final', [RapportFinalController::class, 'monRapportFinal']);
     Route::get('mes-permissions', [PermissionController::class, 'mesPermissions']);
     Route::get('travaux-stagiaire/aujourd-hui', [TravailStagiaireController::class, 'monRapportDuJour']);
+    Route::get('documents-personnels', [DocumentPersonnelController::class, 'index']);
+    Route::post('documents-personnels', [DocumentPersonnelController::class, 'store']);
+    Route::delete('documents-personnels/{id}', [DocumentPersonnelController::class, 'destroy']);
     Route::get('presences/mes-presences', function (Request $request) {
     $employe = $request->user()->employe;
         if (!$employe) return response()->json([]);

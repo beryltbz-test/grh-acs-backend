@@ -23,6 +23,12 @@ class AuthController extends Controller
 
         $user = Auth::user();
 
+        if ($user->statut !== 'actif') {
+            return response()->json([
+                'message' => 'Ce compte a été désactivé. Contactez un administrateur.'
+            ], 403);
+        }
+
         // Session unique par compte : toute session précédemment ouverte sur un
         // autre appareil/navigateur est invalidée dès qu'une nouvelle connexion réussit
         $user->tokens()->delete();

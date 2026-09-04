@@ -4,6 +4,7 @@ use Illuminate\Foundation\Application;
 use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use Illuminate\Auth\AuthenticationException;
+use Illuminate\Console\Scheduling\Schedule;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -24,5 +25,18 @@ return Application::configure(basePath: dirname(__DIR__))
                 return response()->json(['message' => 'Non authentifié'], 401);
             }
         });
-    })->create();
-    
+    })
+    ->withSchedule(function (Schedule $schedule) {
+        $schedule->command('rapports:rappel-midi-vendredi')
+            ->fridays()
+            ->at('12:15')
+            ->timezone('Africa/Porto-Novo')
+            ->withoutOverlapping();
+
+        $schedule->command('rapports:verifier-lundi')
+            ->mondays()
+            ->at('09:05')
+            ->timezone('Africa/Porto-Novo')
+            ->withoutOverlapping();
+    })
+    ->create();
