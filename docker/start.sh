@@ -5,6 +5,10 @@ if [ -z "$APP_KEY" ]; then
     php artisan key:generate --force
 fi
 
+# Corrige les permissions APRÈS le montage du volume (qui écrase celles du build)
+chown -R www-data:www-data /var/www/html/storage /var/www/html/bootstrap/cache
+chmod -R 775 /var/www/html/storage /var/www/html/bootstrap/cache
+
 # Cache de configuration
 php artisan config:cache
 php artisan route:cache
