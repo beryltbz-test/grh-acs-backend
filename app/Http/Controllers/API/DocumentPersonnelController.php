@@ -8,10 +8,10 @@ use Illuminate\Support\Facades\Storage;
 
 class DocumentPersonnelController extends Controller
 {
-    const TYPE = 'document_personnel';
+    const TYPES = ['document_personnel', 'rapport_hebdomadaire'];
     const MAX_FICHIERS = 2;
 
-    // Liste des documents personnels de l'employé/stagiaire connecté
+    // Liste des documents personnels de l'employé/stagiaire connecté (les deux types confondus)
     public function index(Request $request)
     {
         $employe = $request->user()->employe;
@@ -20,11 +20,11 @@ class DocumentPersonnelController extends Controller
         }
 
         return response()->json(
-            $employe->documents()->where('type', self::TYPE)->orderBy('created_at', 'desc')->get()
+            $employe->documents()->whereIn('type', self::TYPES)->orderBy('created_at', 'desc')->get()
         );
     }
 
-    // Upload d'un nouveau document personnel (max 2 par compte)
+    // Upload d'un nouveau document personnel, ou du rapport hebdomadaire (Excel uniquement) — max 2 au total
     public function store(Request $request)
     {
         $employe = $request->user()->employe;
@@ -32,18 +32,26 @@ class DocumentPersonnelController extends Controller
             return response()->json(['message' => 'Aucun profil employé associé'], 404);
         }
 
-        $nombreActuel = $employe->documents()->where('type', self::TYPE)->count();
+        $nombreActuel = $employe->documents()->whereIn('type', self::TYPES)->count();
         if ($nombreActuel >= self::MAX_FICHIERS) {
             return response()->json([
                 'message' => "Vous avez déjà " . self::MAX_FICHIERS . " fichiers dans votre espace personnel. Supprimez-en un avant d'en ajouter un nouveau.",
             ], 422);
         }
 
+        $estRapportHebdo = $request->boolean('est_rapport_hebdo');
+        $type = $estRapportHebdo ? 'rapport_hebdomadaire' : 'document_personnel';
+
+        $regleFormat = $estRapportHebdo ? 'mimes:xls,xlsx' : 'mimes:xls,xlsx,csv,doc,docx,pdf,ppt,pptx';
+        $messageFormat = $estRapportHebdo
+            ? "Le rapport hebdomadaire doit être un fichier Excel (.xls ou .xlsx) uniquement."
+            : "Format non autorisé. Formats acceptés : Excel (.xls, .xlsx, .csv), Word (.doc, .docx), PDF (.pdf), PowerPoint (.ppt, .pptx).";
+
         $request->validate([
-            'fichier' => 'required|file|mimes:xls,xlsx,csv,doc,docx,pdf,ppt,pptx|max:15360',
+            'fichier' => "required|file|{$regleFormat}|max:15360",
         ], [
             'fichier.max' => "Ce fichier dépasse la taille maximale autorisée (15 Mo). Réduisez la taille du fichier avant de réessayer.",
-            'fichier.mimes' => "Format non autorisé. Formats acceptés : Excel (.xls, .xlsx, .csv), Word (.doc, .docx), PDF (.pdf), PowerPoint (.ppt, .pptx).",
+            'fichier.mimes' => $messageFormat,
             'fichier.required' => "Merci de sélectionner un fichier.",
         ]);
 
@@ -51,7 +59,7 @@ class DocumentPersonnelController extends Controller
 
         $document = DocumentEmploye::create([
             'employe_id'     => $employe->id,
-            'type'           => self::TYPE,
+            'type'           => $type,
             'nom_fichier'    => $request->file('fichier')->getClientOriginalName(),
             'chemin_fichier' => $path,
         ]);
@@ -62,7 +70,7 @@ class DocumentPersonnelController extends Controller
         ], 201);
     }
 
-    // Suppression d'un document personnel (uniquement le sien)
+    // Suppression d'un document personnel (uniquement le sien, les deux types confondus)
     public function destroy(Request $request, $id)
     {
         $employe = $request->user()->employe;
@@ -71,7 +79,7 @@ class DocumentPersonnelController extends Controller
         }
 
         $document = DocumentEmploye::where('employe_id', $employe->id)
-            ->where('type', self::TYPE)
+            ->whereIn('type', self::TYPES)
             ->where('id', $id)
             ->first();
 

@@ -34,20 +34,20 @@ class PresenceController extends Controller
             : $qrGlobalActuel->limite_arrivee_employe;
     }
 
-    private function aSoumisRapportHebdo(Employe $employe, Carbon $semaineRef)
+        private function aSoumisRapportHebdo(Employe $employe, Carbon $semaineRef)
     {
         $debut = $semaineRef->copy()->startOfWeek(Carbon::MONDAY)->startOfDay();
         $fin = $semaineRef->copy()->endOfWeek(Carbon::SUNDAY)->endOfDay();
 
         return DocumentEmploye::where('employe_id', $employe->id)
-            ->where('type', 'document_personnel')
+            ->where('type', 'rapport_hebdomadaire')
             ->whereBetween('created_at', [$debut, $fin])
             ->exists();
     }
 
     private function verifierRappelHebdo(Employe $employe, string $sousType, Carbon $maintenant)
     {
-        if ($employe->user->role !== 'employe') {
+        if (!in_array($employe->user->role, ['employe', 'drh'])) {
             return;
         }
 

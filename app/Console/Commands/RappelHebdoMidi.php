@@ -21,14 +21,14 @@ class RappelHebdoMidi extends Command
         $finSemaine = $maintenant->copy()->endOfWeek(Carbon::SUNDAY)->endOfDay();
 
         $employes = Employe::with('user')
-            ->whereHas('user', fn($q) => $q->where('statut', 'actif')->where('role', 'employe'))
+            ->whereHas('user', fn($q) => $q->where('statut', 'actif')->whereIn('role', ['employe', 'drh']))
             ->get();
 
         $envoyes = 0;
 
         foreach ($employes as $employe) {
             $aSoumis = DocumentEmploye::where('employe_id', $employe->id)
-                ->where('type', 'document_personnel')
+                ->where('type', 'rapport_hebdomadaire')
                 ->whereBetween('created_at', [$debutSemaine, $finSemaine])
                 ->exists();
 

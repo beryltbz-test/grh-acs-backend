@@ -13,31 +13,27 @@ use Illuminate\Console\Command;
 class VerifierRapportsHebdoLundi extends Command
 {
     protected $signature = 'rapports:verifier-lundi';
-    protected $description = "Notifie la DRH des employés n'ayant toujours pas soumis leur rapport hebdomadaire après l'ultimatum du lundi";
+    protected $description = "Notifie la DRH (ou le Directeur si c'est la DRH qui est en défaut) des employés n'ayant toujours pas soumis leur rapport hebdomadaire après l'ultimatum du lundi";
 
     public function handle()
     {
         $maintenant = Carbon::now();
-        $semaineRef = $maintenant->copy()->subWeek(); // la semaine concernée est la précédente
+        $semaineRef = $maintenant->copy()->subWeek();
         $debutSemaine = $semaineRef->copy()->startOfWeek(Carbon::MONDAY)->startOfDay();
         $finSemaine = $semaineRef->copy()->endOfWeek(Carbon::SUNDAY)->endOfDay();
 
         $employes = Employe::with('user')
-            ->whereHas('user', fn($q) => $q->where('statut', 'actif')->where('role', 'employe'))
+            ->whereHas('user', fn($q) => $q->where('statut', 'actif')->whereIn('role', ['employe', 'drh']))
             ->get();
 
         $drh = User::where('statut', 'actif')->where('role', 'drh')->get();
-
-        if ($drh->isEmpty()) {
-            $this->warn("Aucun compte DRH actif trouvé — aucune notification envoyée.");
-            return self::SUCCESS;
-        }
+        $directeurs = User::where('statut', 'actif')->where('role', 'directeur')->get();
 
         $signales = 0;
 
         foreach ($employes as $employe) {
             $aSoumis = DocumentEmploye::where('employe_id', $employe->id)
-                ->where('type', 'document_personnel')
+                ->where('type', 'rapport_hebdomadaire')
                 ->whereBetween('created_at', [$debutSemaine, $finSemaine])
                 ->exists();
 
@@ -56,8 +52,16 @@ class VerifierRapportsHebdoLundi extends Command
                 continue; // déjà signalé
             }
 
-            foreach ($drh as $unDrh) {
-                $unDrh->notify(new RapportHebdoNonSoumisDrhNotification(
+            // Si c'est un DRH qui est en défaut, on remonte au Directeur ; sinon, à la DRH.
+            $destinataires = $employe->user->role === 'drh' ? $directeurs : $drh;
+
+            if ($destinataires->isEmpty()) {
+                $this->warn("Aucun destinataire actif ({$employe->user->role === 'drh' ? 'Directeur' : 'DRH'}) pour signaler {$employe->user->name} — notification non envoyée.");
+                continue;
+            }
+
+            foreach ($destinataires as $destinataire) {
+                $destinataire->notify(new RapportHebdoNonSoumisDrhNotification(
                     $employe->user->name,
                     $semaineRef->isoWeek,
                     $semaineRef->isoWeekYear
@@ -66,7 +70,7 @@ class VerifierRapportsHebdoLundi extends Command
             $signales++;
         }
 
-        $this->info("Employés signalés à la DRH : {$signales}");
+        $this->info("Personnes signalées : {$signales}");
         return self::SUCCESS;
     }
 }
